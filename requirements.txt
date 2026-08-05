@@ -1,0 +1,9 @@
+numpy
+scipy
+torch
+torch_geometric
+airfrans
+matplotlib
+pyvista
+scikit-learn
+tensorboard

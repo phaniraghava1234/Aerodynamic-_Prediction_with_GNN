@@ -1,117 +1,195 @@
-# Aerodynamic Flow Prediction with Physics-Informed Graph Neural Networks
+# Aerodynamic Prediction with Graph Neural Networks
 
-## Project Overview
+A Graph Neural Network surrogate for the two-dimensional incompressible
+Reynolds-Averaged Navier-Stokes flow around airfoils, trained on the AirfRANS
+`scarce` regime (200 training simulations, 200 held-out test simulations). The
+same network provides Monte Carlo Dropout predictive uncertainty at inference
+time, without requiring a separate model or retraining.
 
-This project explores the application of Geometric Deep Learning (GDL), specifically Graph Neural Networks (GNNs), for accelerating aerodynamic flow prediction. Leveraging the high-fidelity **AirfRANS dataset**, this work develops a GNN-based surrogate model capable of predicting complex flow fields (velocity, pressure, turbulent kinematic viscosity) around 2D airfoils. A key focus is the integration of **physics-informed features** to enhance model accuracy, generalization, and physical consistency, alongside a preliminary exploration of **uncertainty quantification**.
+The project targets a portfolio deliverable rather than a state-of-the-art
+result. The scientific interest is the behaviour of a small message-passing
+model in the low-data regime and the reliability of MC Dropout as an
+uncertainty signal.
 
-The traditional reliance on computationally expensive Computational Fluid Dynamics (CFD) simulations often bottlenecks aerodynamic design cycles. This project demonstrates how GNNs can provide rapid, high-resolution predictions, offering a significant step towards efficient, data-driven aerospace design and analysis.
+## Overview
 
-## Key Features & Components
+- **Data.** AirfRANS `scarce` split (Bonnet et al., arXiv:2212.07564).
+  Each simulation is a point cloud of roughly 180 000 mesh nodes with per-node
+  position, freestream velocity, wall distance, surface normals and RANS
+  solution fields. Chord length is 1 m for every airfoil.
+- **Model.** Encoder / processor / decoder. The encoder is a two-layer MLP;
+  the processor is a stack of three GraphSAGE convolutions with LayerNorm on
+  a graph whose edges come from a 2D Delaunay triangulation of the mesh
+  nodes; the decoder is a two-layer MLP that produces four node-level
+  regression outputs. Around 126 000 parameters. Dropout layers in the
+  encoder and decoder MLPs supply the stochastic source used later for MC
+  Dropout, so no architectural change is needed for uncertainty estimation.
+- **Targets, per mesh node.** Velocity components u and v (m/s), kinematic
+  pressure p/ρ (m²/s²), turbulent kinematic viscosity ν_t (m²/s).
+- **Reported metrics.** Field-wise mean squared and mean absolute error on
+  denormalised predictions; lift and pressure-integrated drag coefficients
+  with R² against the CFD ground truth; mean predictive standard deviation
+  per field and Pearson correlation between predictive standard deviation and
+  absolute error.
 
-* **Graph Neural Network (GNN) Model:** Implementation of a GNN architecture (e.g., PointNet++ inspired or Message Passing based) designed to process unstructured point cloud data from CFD simulations.
-* **AirfRANS Dataset Integration:** Utilizes the `torch_geometric.datasets.AirfRANS` dataset, handling its point cloud structure and constructing appropriate graph representations (e.g., using `KNNGraph` or `RadiusGraph`).
-* **Physics-Informed Feature Engineering:** Incorporation of domain-specific knowledge by deriving and integrating features such as approximate local Reynolds number ($Re_x$) and conceptually, inviscid pressure distribution ($c_{p,inviscid}$), to guide the GNN towards physically consistent predictions.
-* **Flow Field Prediction:** Node-level regression to predict multiple aerodynamic quantities (velocity components, pressure, turbulent kinematic viscosity) across the airfoil and surrounding flow domain.
-* **Uncertainty Quantification (Preliminary):** Exploration of basic uncertainty estimation techniques (e.g., Monte Carlo Dropout) to provide confidence bounds for predictions, crucial for high-stakes engineering applications.
-* **Performance Analysis & Visualization:** Comprehensive evaluation using quantitative metrics (MSE, R-squared) and qualitative visualizations (pressure contours, $C_p$ plots) to assess model accuracy and generalization.
+## Repository layout
 
-## Technical Stack
+```
+src/
+  download_data.py       one-time AirfRANS download (~9 GB)
+  inspect_data.py        quick shape and dtype check on the raw dataset
+  eda.py                 baseline exploratory data analysis
+  eda_extended.py        per-simulation summary statistics on the scarce split
+  eda_all_1000.py        the same over the full 1000-simulation set
+  eda_flow_fields.py     velocity, pressure and turbulence field images
+  eda_metrics.py         metric EDA: audit, aero coefficients, geometry, correlations
+  data_processing.py     converts raw simulations to PyTorch Geometric graphs
+  models.py              baseline GNN definition (SAGEConv + LayerNorm)
+  train.py               training loop, checkpointing, TensorBoard logging
+  evaluate.py            deterministic evaluation on the test split
+  evaluate_uq.py         Monte Carlo Dropout uncertainty quantification
+  postprocess.py         shared utilities: de-normalisation, Cp, CL, CD, R²
+tests/
+  test_pipeline.py       graph construction and forward/backward pass
+  test_full_pipeline.py  synthetic training to evaluation to UQ smoke test
+data/
+  Dataset/               raw AirfRANS (created by download_data.py; gitignored)
+  processed/             PyG graph datasets and normalisation statistics
+models/                  trained model checkpoints
+results/
+  eda/                   baseline EDA outputs
+  flow_fields/           physics field images
+  eda_metrics/           master metrics table and correlation figures
+  runs/                  TensorBoard logs
+  evaluation/            deterministic evaluation metrics and figures
+  uq/                    MC Dropout uncertainty figures
+docs/                    reference materials and review notes
+plan.md                  execution plan for the training campaign
+SUMMARY.md               one-page project summary
+```
 
-* **Python:** Core programming language.
-* **PyTorch:** Deep learning framework.
-* **PyTorch Geometric (PyG):** Library for implementing GNNs and handling graph data.
-* **NumPy:** Numerical computing.
-* **Matplotlib / Seaborn:** Data visualization.
-* **Scikit-learn:** Utility functions (e.g., data scaling, metrics).
-* **XFOIL (External):** Tool for generating inviscid pressure data (used for feature engineering, potentially for a subset of data).
+## Environment
 
-## Setup and Installation
+The project uses the `gnn_surrogate` conda environment, which contains
+Python 3.12, PyTorch 2.8.0 with CUDA 12.8 support, PyTorch Geometric 2.6.1
+with the full C++ extension stack, `airfrans`, and the standard scientific
+Python packages. TensorBoard is the only remaining requirement:
 
-To set up the project locally, follow these steps:
+```bash
+conda activate gnn_surrogate
+pip install tensorboard
+```
 
-1.  **Clone the repository:**
-    ```bash
-    git clone [https://github.com/your-username/your-repo-name.git](https://github.com/your-username/your-repo-name.git)
-    cd your-repo-name
-    ```
-2.  **Create a virtual environment (recommended):**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # On Windows: `venv\Scripts\activate`
-    ```
-3.  **Install dependencies:**
-    ```bash
-    pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu118](https://download.pytorch.org/whl/cu118)  # For CUDA 11.8, adjust the CUDA version if needed or use 'cpu' if you don't have a GPU
-    pip install torch_geometric
-    pip install numpy matplotlib scikit-learn
-    ```
-4.  **Download AirfRANS Dataset:** The dataset will be automatically downloaded by PyTorch Geometric when you first access it in your code.
+Verify CUDA is exposed to PyTorch:
 
-## Usage
+```bash
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
 
-The project is structured into several Python scripts, each focusing on a different aspect of the GNN development.
+Expected: `True NVIDIA GeForce RTX 2060`.
 
-* `data_preprocessing.py`: Handles loading the AirfRANS dataset, applying graph transforms (KNNGraph/RadiusGraph), and normalizing features.
-* `model_architecture.py`: Defines the GNN model (e.g., PointNet++ inspired).
-* `train.py`: Contains the training and validation loop, including loss function, optimizer, and basic evaluation.
-* `feature_engineering.py`: (To be implemented/expanded) Script for calculating and integrating physics-informed features.
-* `evaluate.py`: Performs comprehensive evaluation and generates visualizations.
+## Pipeline
 
-To run the full pipeline:
+Executed sequentially, from the repository root, with `gnn_surrogate`
+activated:
 
+```bash
+python src/download_data.py     # one-time download and extraction (~9 GB)
+python src/eda.py               # baseline EDA outputs
+python src/data_processing.py   # writes train/val/test.pt and norm_stats.pt
+python src/train.py             # writes models/baseline_best.pt
+python src/evaluate.py          # writes results/evaluation/
+python src/evaluate_uq.py       # writes results/uq/
+```
 
-# Example: Run the training script
-python train.py
-# Example: Run evaluation after training
-python evaluate.py
+Smoke tests using synthetic data (do not require the AirfRANS download):
 
-# References
+```bash
+python tests/test_pipeline.py
+python tests/test_full_pipeline.py
+```
 
-Here is a list of references, formatted in a common scientific paper style, for the resources and concepts utilized throughout this project's planning and development:
+## Exploratory data analysis
 
-1.  **AirfRANS Dataset Documentation:** The official documentation for the AirfRANS dataset, detailing its structure, contents, and usage.
-    * [https://airfrans.readthedocs.io/en/latest/](https://airfrans.readthedocs.io/en/latest/)
-    * [https://pytorch-geometric.readthedocs.io/en/latest/modules/datasets.html#torch_geometric.datasets.AirfRANS](https://pytorch-geometric.readthedocs.io/en/latest/modules/datasets.html#torch_geometric.datasets.AirfRANS)
+The EDA modules together produce per-simulation summary statistics, node-level
+target and input distributions, mesh and Delaunay graph statistics, images of
+the velocity, kinematic pressure and turbulent viscosity fields, aerodynamic
+coefficient distributions computed from surface pressure, boundary-layer and
+wake analyses, and a correlation matrix over flight parameters, integrated
+aerodynamic coefficients, mesh statistics and target-field summaries. Outputs
+are grouped under `results/eda/`, `results/flow_fields/` and
+`results/eda_metrics/`. A review of the metric EDA and the fixes that
+followed is recorded in `docs/eda_metrics_issues.md`.
 
-2.  **Jena, T., Morvan, S., & Benard, N. (2025). Predicting airfoil pressure distribution using boundary graph neural networks.** *arXiv preprint arXiv:2503.18638*.
-    * [https://arxiv.org/abs/2503.18638](https://arxiv.org/abs/2503.18638)
-    * *Note: This paper was foundational for the physics-informed features and B-GNN concepts discussed in this project.*
+## Data schema
 
-3.  **H. Wu, P. J. & B. L. (2024). DrivAerNet++: A Large-Scale Multi-Modal Dataset for Aerodynamic Car Design.** *arXiv preprint arXiv:2402.13840*.
-    * [https://arxiv.org/abs/2402.13840](https://arxiv.org/abs/2402.13840)
-    * *Associated GitHub Repository:* [https://github.com/Mohamedelrefaie/DrivAerNet](https://github.com/Mohamedelrefaie/DrivAerNet)
+Each raw AirfRANS simulation is delivered as a numpy array of shape (N, 12):
 
-4.  **Wang, W., Li, J., & Cai, C. (2023). EAGLE: A Large-Scale Dataset for Unsteady Fluid Dynamics.** *NeurIPS 2023 Datasets and Benchmarks Track*.
-    * [https://eagle-dataset.github.io/](https://eagle-dataset.github.io/)
+| Columns | Content | Unit |
+|---|---|---|
+| 0-1 | position x, y | m |
+| 2-3 | freestream velocity U_x, U_y | m/s |
+| 4 | wall distance | m |
+| 5-6 | surface normals n_x, n_y (zero off the surface) | - |
+| 7-8 | velocity u, v (target) | m/s |
+| 9 | kinematic pressure p/ρ (target) | m²/s² |
+| 10 | turbulent kinematic viscosity ν_t (target) | m²/s |
+| 11 | on-airfoil flag | - |
 
-5.  **Perić, D., Jasa, J., Vrhovac, P., & Milovanović, V. (2024). WindsorML: A High-Fidelity CFD Dataset for Machine Learning in Automotive Aerodynamics.** *NeurIPS 2024 Datasets and Benchmarks Track*.
-    * [https://proceedings.neurips.cc/paper_files/paper/2024/file/42a59a5f35b1b3c3fd648397c88a7164-Supplemental-Datasets_and_Benchmarks_Track.pdf](https://proceedings.neurips.cc/paper_files/paper/2024/file/42a59a5f35b1b3c3fd648397c88a7164-Supplemental-Datasets_and_Benchmarks_Track.pdf)
-    * *Associated S3 Bucket:* `s3://caemldatasets/windsor/dataset`
+After `data_processing.py`, each simulation becomes a PyTorch Geometric `Data`
+object with:
 
-6.  **NASA Common Research Model Website:** A collection of reference geometries and associated computational/experimental data for aeronautical research.
-    * [https://commonresearchmodel.larc.nasa.gov/](https://commonresearchmodel.larc.nasa.gov/)
+- `x` (N, 8): min-max scaled position (2), z-scored freestream velocity and
+  wall distance (3), surface normals (2), on-surface flag (1).
+- `edge_index` (2, E): undirected Delaunay edges.
+- `edge_attr` (E, 3): edge displacement components and length, expressed in
+  the scaled position frame.
+- `y` (N, 4): z-scored targets.
+- `pos`, `surf`, `name`: raw position, surface mask and simulation identifier,
+  retained for evaluation and plotting.
 
-7.  **Jain, A., & Gupta, A. (2021). Learning to Simulate with Graph Neural Networks.** *NVIDIA Developer Blog*.
-    * [https://developer.nvidia.com/blog/learning-to-simulate-with-graph-neural-networks/](https://developer.nvidia.com/blog/learning-to-simulate-with-graph-neural-networks/)
-    * *Associated MeshGraphNet (MGN) implementation:* [https://github.com/NVIDIA/modulus/tree/main/examples/cfd/external_aerodynamics/aero_graph_net](https://github.com/NVIDIA/modulus/tree/main/examples/cfd/external_aerodynamics/aero_graph_net)
+Normalisation statistics are fitted on the training split alone; the resulting
+`norm_stats.pt` supplies the inverse transform needed to report predictions in
+physical units.
 
-8.  **Wang, H., & Chen, G. (2021). Multi-Grid Graph Neural Networks with Self-Attention for Fluid Simulations.** *arXiv preprint arXiv:2104.09033*.
-    * [https://arxiv.org/abs/2104.09033](https://arxiv.org/abs/2104.09033)
+## Assumptions and known limitations
 
-9.  **Qi, C. R., Yi, L., Su, H., & Guibas, L. J. (2017). PointNet++: Deep Hierarchical Feature Learning on Point Sets in a Metric Space.** *Advances in Neural Information Processing Systems, 30*.
-    * [https://arxiv.org/abs/1706.02413](https://arxiv.org/abs/1706.02413)
+These are deliberate modelling choices, documented so they are not treated as
+defects.
 
-10. **PyTorch Geometric Documentation:** Comprehensive documentation for various modules, layers, and datasets within the PyTorch Geometric library.
-    * [https://pytorch-geometric.readthedocs.io/en/latest/](https://pytorch-geometric.readthedocs.io/en/latest/)
+1. Edges come from a 2D Delaunay triangulation of the mesh nodes. A small
+   number of edges cross the airfoil interior; this is acceptable for a
+   baseline and can be filtered if error maps indicate artefacts along the
+   surface.
+2. The boundary-condition input is a single on-surface bit. Wall distance
+   carries the near-field against far-field distinction; no separate
+   inlet / outlet / far-field one-hot is used.
+3. Drag is integrated from surface pressure only. Viscous shear is neglected;
+   the reported CD is a pressure drag and should be interpreted as such when
+   compared to a viscous-inclusive CFD reference.
+4. Surface points are ordered by angle around the surface centroid. This is
+   valid for star-shaped NACA 4- and 5-digit contours as generated in
+   AirfRANS; a strongly reflexed geometry would require a nearest-neighbour
+   ordering instead.
+5. Twenty simulations from the end of the 200-sim training split are held
+   out as validation. The slice is fixed rather than randomised, to keep
+   runs reproducible.
+6. No physics-informed loss, hierarchical GNN or multi-fidelity extension is
+   included. These are outside the scope of this deliverable.
 
-11. **Pedregosa, F., et al. (2011). Scikit-learn: Machine Learning in Python.** *Journal of Machine Learning Research, 12*, 2825-2830.
-    * [https://scikit-learn.org/stable/](https://scikit-learn.org/stable/)
+## Expected outputs after a training run
 
-12. **Gal, Y., & Ghahramani, Z. (2016). Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning.** *International Conference on Machine Learning*.
-    * [https://arxiv.org/abs/1506.02142](https://arxiv.org/abs/1506.02142)
-
-13. **Vazquez, D., & Benard, N. (2023). A Multi-Fidelity Graph U-Net Model for Accelerated Physics Simulations.** *arXiv preprint arXiv:2307.16546*.
-    * [https://arxiv.org/abs/2307.16546](https://arxiv.org/abs/2307.16546)
-
-14. **You, Y., et al. (2021). Uncertainty Quantification over Graph with Conformalized Graph Neural Networks.** *NeurIPS 2021*.
-    * [https://proceedings.neurips.cc/paper_files/paper/2021/file/71c4ac472e391307682f6f43e3713600-Paper.pdf](https://proceedings.neurips.cc/paper_files/paper/2021/file/71c4ac472e391307682f6f43e3713600-Paper.pdf)
+- `models/baseline_best.pt`: checkpoint with the lowest validation loss.
+- `results/runs/<timestamp>/`: TensorBoard scalars for training loss,
+  validation loss and learning rate.
+- `results/evaluation/metrics.json`: field-wise MSE and MAE, and R² with mean
+  absolute and mean relative error for CL and pressure-based CD.
+- `results/evaluation/*.png`: lift and drag scatter plots, and field, Cp and
+  streamline comparisons for the best, median and worst test cases by
+  pressure MSE.
+- `results/uq/uq_metrics.json`: mean predictive standard deviation per field
+  and Pearson correlation between predictive standard deviation and absolute
+  error.
+- `results/uq/*.png`: predictive standard deviation against absolute error
+  scatter, spatial uncertainty maps, and Cp with ±2σ bands for the least and
+  most uncertain test cases.
